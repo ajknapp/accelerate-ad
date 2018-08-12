@@ -19,6 +19,7 @@ import Data.Array.Accelerate.Array.Sugar
 import Data.Array.Accelerate.Trafo (convertFun, convertAfun, convertAcc, convertExp)
 import Data.Array.Accelerate.Trafo.Base
 import qualified Data.Array.Accelerate.Trafo.Fusion as F
+import Data.Array.Accelerate.Product
 import Data.Array.Accelerate.Trafo.Sharing hiding (convertFun, convertAfun, convertAcc, convertExp)
 import Data.Array.Accelerate.Trafo.Normalise
 import Data.Array.Accelerate.Trafo.Simplify
@@ -42,6 +43,36 @@ runExp e = A.indexArray (run (A.unit e)) Z
 
 addition :: A.Exp Double -> A.Exp Double -> A.Exp Double
 addition x y = x + y
+
+{-
+adMap f f' x x' = pair (A.map f x) (matMul (A.reshape sh $ A.map f' x) x')
+  where sh = A.lift $ A.shape x :. (1::Int)
+
+adZipWith f f0 f1 x y = pair (A.zipWith f x y) $ (A.reshape sh0' f0s) A.++ (A.reshape sh1' f1s)
+  where f0s = A.zipWith f0 x y
+        sh0' = A.lift $ A.shape f0s :. (1::Int)
+        f1s = A.zipWith f1 x y
+        sh1' = A.lift $ A.shape f0s :. (1::Int)
+-}
+
+adMap
+    :: forall acc aenv sh a b. (Kit acc, Shape sh, Slice sh, A.Elt a, A.Elt b)
+    => PreFun     acc aenv (a -> b)
+    ->            acc aenv (Array sh a, Array (sh :. Int) a) -- original input array
+    -> PreOpenAcc acc aenv (Array sh b, Array (sh :. Int) b)
+adMap f x
+  = Alet x
+  $^ Alet (weaken s1 . inject $ Aprj ZeroTupIdx x)
+  $^ Alet (weaken s2 . inject $ Aprj (SuccTupIdx ZeroTupIdx) x)
+  $^ Alet (inject $ Map (weaken s3 f) avar1)
+  $^ Alet (inject $ Map (weaken s4 $ applyRewriteExp (flip diffPreOpenExp 0) f) avar1)
+  $^ Atuple (NilAtup `SnocAtup` avar0 `SnocAtup` avar1)
+-- adMap f x x'
+--   = Alet x
+--   $^ Alet (weaken s1 x')
+--   $^ Alet (inject $ Map (weaken s2 $ applyRewriteExp (flip diffPreOpenExp 0) f) avar0)
+--   $^ Alet (inject $ Map (weaken s3 f) avar2)
+--   $^ Atuple (NilAtup `SnocAtup` avar0 `SnocAtup` avar1)
 
 {-
 -- | Lifts a fold to a computation of the fold and its Frechet derivative.
@@ -153,15 +184,6 @@ idMat n = A.generate (A.lift $ Z :. n :. n) f
       in
       A.cond (A.fst idx2 A.== A.snd idx2) (A.constant 1) (A.constant 0)
 
-adMap f f' x x' = pair (A.map f x) (matMul (A.reshape sh $ A.map f' x) x')
-  where sh = A.lift $ A.shape x :. (1::Int)
-
-adZipWith f f0 f1 x y = pair (A.zipWith f x y) $ (A.reshape sh0' f0s) A.++ (A.reshape sh1' f1s)
-  where f0s = A.zipWith f0 x y
-        sh0' = A.lift $ A.shape f0s :. (1::Int)
-        f1s = A.zipWith f1 x y
-        sh1' = A.lift $ A.shape f0s :. (1::Int)
-
 pair :: (Arrays a, Arrays b) => A.Acc a -> A.Acc b -> A.Acc (a,b)
 pair x y = A.lift (x,y)
 
@@ -222,21 +244,97 @@ diffOpenAcc = cvtA
     cvtA :: OpenAcc aenv a -> OpenAcc aenv a
     cvtA (OpenAcc pacc) = OpenAcc $ case pacc of
       Alet bnd body -> Alet (cvtA bnd) (cvtA body)
+      Avar idx -> error "Avar"
+      Atuple t -> Atuple $ cvtT t
+      Aprj idx xs -> error "Aprj"
+      Apply fs xs -> error "Apply"
+      Aforeign f g xs -> error "Aforeign"
+      Acond cnd xs ys -> error "Acond"
+      Awhile cnd step xs -> error "Awhile"
+      Use xs -> error "Use"
+      Unit x -> error "Unit"
+      Reshape sh xs -> error "Reshape"
+      Generate sh f -> error "Generate"
+      Transform sh shF f xs -> error "Transform"
+      Replicate sl xs expr -> error "Replicate"
+      Slice sl xs expr -> error "Slice"
       Map f a -> Map (applyRewriteExp (flip diffPreOpenExp 0) f) (cvtA a)
+      ZipWith f xs ys -> error "ZipWith"
+      Fold f e0 xs -> error "Fold"
+      Fold1 f xs -> error "Fold1"
+      FoldSeg f e0 xs segF -> error "FoldSeg"
+      Fold1Seg f xs segF -> error "FoldSeg1"
+      Scanl f e0 xs -> error "Scanl"
+      Scanl' f e0 xs -> error "Scanl"
+      Scanl1 f xs -> error "Scanl1"
+      Scanr f e0 xs -> error "Scanr"
+      Scanr' f e0 xs -> error "Scanr'"
+      Scanr1 f xs -> error "Scanr1"
+      Permute f xs g ys -> error "Permute"
+      Backpermute sh shF xs -> error "Backpermute"
+      Stencil f df xs -> error "Stencil"
+      Stencil2 f g df dg xs -> error "Stencil2"
 
 newtype DelayedOpenAcc' aenv t = DelayedOpenAcc' (DelayedOpenAcc aenv t)
 undelayOpenAcc' (DelayedOpenAcc' a) = a
 
-diffDelayedOpenAcc :: DelayedOpenAcc aenv a -> DelayedOpenAcc aenv a
+diffDelayedOpenAcc :: (Slice sh, Shape sh, Elt a, A.Num a, Num (A.Exp a)) => DelayedOpenAcc aenv (Array sh a) -> DelayedOpenAcc aenv (Array sh a, Array (sh :. Int) a)
 diffDelayedOpenAcc a = cvtA a
   where
-    cvtA :: DelayedOpenAcc aenv t -> DelayedOpenAcc aenv t
+    -- cvtT :: Atuple (DelayedOpenAcc aenv) (Array sh' e) -> Atuple (DelayedOpenAcc aenv) (Array sh' e, Array (sh' :. Int) e)
+    -- cvtT :: (Slice sh', Shape sh', Elt e) => Atuple (DelayedOpenAcc aenv) (Array sh' e) -> Atuple (DelayedOpenAcc aenv) (Array sh' e, Array (sh' :. Int) e)
+    -- cvtT atup = case atup of
+    --   NilAtup      -> NilAtup
+    --   SnocAtup t a -> cvtT t `SnocAtup` cvtA a
+
+    -- cvtA :: DelayedOpenAcc aenv t -> DelayedOpenAcc aenv t
+    cvtA :: (Slice sh', Shape sh', Elt e) => DelayedOpenAcc aenv (Array sh' e) -> DelayedOpenAcc aenv (Array sh' e, Array (sh' :. Int) e)
     cvtA pacc = case pacc of
-      Delayed e fn ix -> Delayed (diffPreOpenExp e 0) fn ix
+      -- Delayed e fn ix -> Manifest $ Atuple (NilAtup `SnocAtup` Delayed e fn ix `SnocAtup` Delayed (error "AH") (error "HA") ix)
       Manifest m -> Manifest $ case m of
-        Alet bnd body -> Alet (cvtA bnd) (cvtA body)
-        Fold1 f a' -> Fold1 f a'
-        Map f a' -> Map (applyRewriteExp (flip diffPreOpenExp 0) f) a'
+        Alet bnd body -> Alet bnd (cvtA body)
+        Avar idx -> error "Avar"
+        -- Atuple t -> Atuple $ cvtT t
+        Aprj idx xs -> error "Aprj"
+        Apply fs xs -> error "Apply"
+        Aforeign f g xs -> error "Aforeign"
+        Acond cnd xs ys -> Acond cnd (cvtA xs) (cvtA ys)
+        Awhile cnd step xs -> error "Awhile"
+        Use xs -> error "Use"
+        Unit x -> error "Unit"
+        Reshape sh xs -> error "Reshape"
+        Generate sh f -> error "Generate"
+        Transform sh shF f xs -> error "Transform"
+        Replicate sl xs expr -> error "Replicate"
+        Slice sl xs expr -> error "Slice"
+        Map f xs -> adMap f (cvtA xs) -- Map (applyRewriteExp (flip diffPreOpenExp 0) f) xs
+        ZipWith f xs ys -> error "ZipWith"
+        Fold f e0 xs -> error "Fold"
+        Fold1 f xs -> error "Fold1"
+        FoldSeg f e0 xs segF -> error "FoldSeg"
+        Fold1Seg f xs segF -> error "FoldSeg1"
+        Scanl f e0 xs -> error "Scanl"
+        -- Scanl' f e0 xs -> error "Scanl"
+        Scanl1 f xs -> error "Scanl1"
+        Scanr f e0 xs -> error "Scanr"
+        -- Scanr' f e0 xs -> error "Scanr'"
+        Scanr1 f xs -> error "Scanr1"
+        Permute f xs g ys -> error "Permute"
+        Backpermute sh shF xs -> error "Backpermute"
+        Stencil f xbnd xs -> error "Stencil"
+        Stencil2 f xbnd xs ybnd ys -> error "Stencil2"
+
+diffAfun
+    :: (Num a, Shape sh, Elt a, Slice sh, Num (A.Exp a))
+    => PreAfun DelayedOpenAcc (Array sh a -> Array sh a)
+    -> PreAfun DelayedOpenAcc (Array sh a -> (Array sh a, Array (sh :. Int) a))
+diffAfun (Alam (Abody b)) = Alam . Abody $ diffDelayedOpenAcc b
+
+st1 :: A.Stencil3x3 Double -> A.Stencil3x3 Double -> A.Exp Double
+st1 ((a,b,c),(d,e,f),(g,h,i)) _ = 2.0*h+b
+
+st :: A.Stencil3 Double -> A.Exp Double
+st (a,b,c) = a-2.0*b+c
 
 -- analogous to function from first blog post
 --
@@ -252,10 +350,31 @@ diffPreOpenExp e i = cvtE e
     cvtE = \case
       Let bnd body        -> Let (cvtE bnd) (cvtE body)
       Var v               -> delta (idxToInt v) i
-      Const{}             -> delta 0 1 -- zero
+      Foreign asm f expr  -> error "Foreign functions aren't differentiable."
       Tuple t             -> Tuple (cvtT t)
-      Prj ix e            -> Prj ix (cvtE e)
+      Prj ix expr         -> Prj ix (cvtE expr)
+      IndexNil            -> error "IndexNil"
+      IndexCons idx idxs  -> error "IndexCons"
+      IndexHead idx       -> error "IndexHead"
+      IndexTail idx       -> error "IndexTail"
+      IndexAny            -> error "IndexAny"
+      IndexSlice sl slexp expr -> error "IndexSlice"
+      IndexFull sl slex expr -> error "IndexFull"
+      ToIndex idx jdx     -> error "ToIndex"
+      FromIndex idx jdx   -> error "FromIndex"
+      Cond cnd x y        -> error "Cond"
+      While cnd f xs      -> error "While"
+      Const{}             -> delta 0 1 -- zero
+      PrimConst{}         -> delta 0 1 -- zero
       PrimApp f x         -> primApp f x
+      Index xs idx        -> error "Index"
+      LinearIndex xs idx  -> error "LinearIndex"
+      Shape xs            -> Shape xs
+      ShapeSize expr      -> error "ShapeSize"
+      Intersect expr1 expr2 -> error "Intersect"
+      Union expr1 expr2   -> error "Union"
+      Undef               -> Undef
+      Coerce expr         -> Coerce expr
 
     cvtT :: Tuple (PreOpenExp acc env aenv) e -> Tuple (PreOpenExp acc env aenv) e
     cvtT NilTup        = NilTup
@@ -480,12 +599,13 @@ applyRewriteAcc
 applyRewriteAcc k (Abody b) = Abody (k b)
 applyRewriteAcc k (Alam f)  = Alam (applyRewriteAcc k f)
 
-applyRewriteAccDelay
-    :: (forall aenv' t'. DelayedOpenAcc aenv' t' -> DelayedOpenAcc aenv' t')
-    -> PreOpenAfun DelayedOpenAcc aenv t
-    -> PreOpenAfun DelayedOpenAcc aenv t
-applyRewriteAccDelay k (Abody b) = Abody (k b)
-applyRewriteAccDelay k (Alam f)  = Alam (applyRewriteAccDelay k f)
+-- applyRewriteAccDelay
+--     :: (Arrays s, Arrays t) =>
+--     (forall aenv' t' s'. DelayedOpenAcc aenv' t' -> DelayedOpenAcc aenv' s')
+--     -> PreOpenAfun DelayedOpenAcc aenv t
+--     -> PreOpenAfun DelayedOpenAcc aenv s
+-- applyRewriteAccDelay k (Abody b) = Abody (k b)
+-- applyRewriteAccDelay k (Alam f)  = Alam (_foo)
 
 
 t1 :: Fun () (Int -> Float -> Float)

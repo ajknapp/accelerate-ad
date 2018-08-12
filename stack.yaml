@@ -42,7 +42,10 @@ packages:
 extra-deps:
 - git: git@github.com:ajknapp/accelerate.git
   commit: 7c89e814b061ce820567cf7b9efb99826814eaed
+  # - git: git@github.com:conal/concat.git
+  #   commit: 7fa8fe84e823fe58cdc101c6130b6fbad6d6a63b
 - half-0.3
+- CC-delcont-0.2.1.0
 
 # Override default flag values for local packages and extra-deps
 # flags: {}

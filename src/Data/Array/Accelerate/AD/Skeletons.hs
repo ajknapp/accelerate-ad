@@ -25,8 +25,12 @@ import Prelude                                  as P hiding ( last )
 
 import Data.Array.Accelerate.AD.FromHOAS
 
-
 import qualified Data.Array.Accelerate as A
+
+import Data.Array.Accelerate.Interpreter (run)
+
+runExp :: Elt e => A.Exp e -> e
+runExp e = A.indexArray (run (A.unit e)) A.Z
 
 primApp1 dict f u =
   PrimApp (f dict) u
@@ -76,18 +80,17 @@ avar3 = inject $ Avar $ s3 ZeroIdx
 -- ($^) f a = f $ inject a
 
 
-{--
 -- | Lifts a fold to a computation of the fold and its Frechet derivative.
 --
 adFold1
     :: (A.Num a, P.Num a, Slice sh, Shape sh, Elt a, Elt b)
-    => (Exp b -> Exp b -> Exp b)            -- ^ original fold function
-    -> (Exp b -> Exp b -> Exp a)            -- ^ derivative of f with respect to first argument
-    -> (Exp b -> Exp b -> Exp a)            -- ^ derivative of f with respect to second argument
-    -> Acc (Array (sh :. Int) b)            -- ^ original input array
-    -> Acc (Array (sh :. Int :. Int) a)     -- ^ Frechet derivative of original input computed via chain rule
-    -> Acc ( Array sh b
-           , Array (sh :. Int :. Int) a)
+    => (A.Exp b -> A.Exp b -> A.Exp b)            -- ^ original fold function
+    -> (A.Exp b -> A.Exp b -> A.Exp a)            -- ^ derivative of f with respect to first argument
+    -> (A.Exp b -> A.Exp b -> A.Exp a)            -- ^ derivative of f with respect to second argument
+    -> A.Acc (A.Array (sh :. Int) b)            -- ^ original input array
+    -> A.Acc (A.Array (sh :. Int :. Int) a)     -- ^ Frechet derivative of original input computed via chain rule
+    -> A.Acc (A.Array sh b
+            , A.Array (sh :. Int :. Int) a)
 adFold1 f f0 f1 x x' = lift ( ans, matMul ans' x')
   where
     fs      = A.scanl1 f x
@@ -108,9 +111,6 @@ adFold1 f f0 f1 x x' = lift ( ans, matMul ans' x')
     term1   = ones   A.++ A.zipWith f0 fs (A.tail x)
     term2   = term2' A.++ ones
 
---}
-
-
 lastA :: (Shape sh, Slice sh, Elt e) => A.Acc (Array (sh:.Int) e) -> A.Acc (Array sh e)
 lastA xs =
   let n = A.indexHead (A.shape xs)
@@ -122,14 +122,17 @@ matMul
     -> A.Acc (Array (sh :. Int :. Int) a)
     -> A.Acc (Array (sh :. Int :. Int) a)
 matMul arr brr
-  = A.fold (+) 0
-  $ A.zipWith (*) arrRepl brrRepl
+  = if ca P./= rb then error msg else A.fold (+) 0 $ A.zipWith (*) arrRepl brrRepl
   where
+    msg = show ca P.++ "AGH" P.++ show rb
+    ca = runExp colsA
+    rb = runExp rowsB
+    colsA   = A.indexHead $ A.shape arr
     rowsA   = A.indexHead . A.indexTail $ A.shape arr
+    rowsB   = A.indexHead . A.indexTail $ A.shape brr
     colsB   = A.indexHead $ A.shape brr
-    arrRepl = A.replicate (lift $ Any :. colsB :. All) arr
+    arrRepl = A.replicate (lift $ Any :. All :. colsB :. All) arr
     brrRepl = A.replicate (lift $ Any :. rowsA :. All :. All) (transposeLastTwo brr)
-
 
 -- transposeLastTwo = transposeOn _1 _2
 --
@@ -137,16 +140,16 @@ transposeLastTwo
     :: (Elt a, Shape sh, Slice sh)
     => A.Acc (Array (sh :. Int :. Int) a)
     -> A.Acc (Array (sh :. Int :. Int) a)
-transposeLastTwo v = A.backpermute (trans' $ A.shape v) trans' v
-  where
-    trans' :: (Slice sh) => A.Exp (sh :. Int :. Int) -> A.Exp (sh :. Int :. Int)
-    trans' s =
-      let sh         = A.indexHead s
-          shTail     = A.indexTail s
-          sh'        = A.indexHead shTail
-          shTailTail = A.indexTail shTail
-      in
-      lift $ shTailTail :. sh :. sh'
+transposeLastTwo v = A.backpermute (swapLastTwo $ A.shape v) swapLastTwo v
+
+swapLastTwo :: (Slice sh) => A.Exp (sh :. Int :. Int) -> A.Exp (sh :. Int :. Int)
+swapLastTwo s =
+  let sh         = A.indexHead s
+      shTail     = A.indexTail s
+      sh'        = A.indexHead shTail
+      shTailTail = A.indexTail shTail
+  in
+  lift $ shTailTail :. sh :. sh'
 
 
 -- reverseLast = reverseOn _1
@@ -165,3 +168,21 @@ transposeLastTwo v = A.backpermute (trans' $ A.shape v) trans' v
 --         sh' = A.indexTail sh
 --         k   = A.indexHead sh
 
+idMat
+  :: (A.Elt a, P.Num a) =>
+    A.Exp Int
+     -> A.Acc (Array ((Z :. Int) :. Int) a)
+idMat n = A.generate (A.lift $ Z :. n :. n) f
+  where
+    f idx = let
+      idx2 = A.unindex2 idx
+      in
+      A.cond (A.fst idx2 A.== A.snd idx2) (A.constant 1) (A.constant 0)
+
+idTensor :: (A.Elt a, P.Num a, Shape sh, Slice sh) => A.Exp Int -> A.Acc (Array sh a) -> A.Acc (Array ((sh :. Int) :. Int) a)
+idTensor n x = A.generate (A.lift $ (A.shape x) :. n :. n) f
+  where f idx =
+          let
+            p = A.indexHead idx
+            q = A.indexHead $ A.indexTail idx
+          in A.cond (p A.== q) (A.constant 1) (A.constant 0)
