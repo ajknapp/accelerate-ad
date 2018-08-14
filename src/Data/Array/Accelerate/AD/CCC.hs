@@ -174,6 +174,7 @@ instance {-# OVERLAPPING #-} (A.Elt a, A.Num a, A.Fractional a) => NumCat (->) (
   negateC = P.negate
   fromIntegerC k = P.const (P.fromInteger k)
 
+-- useless due to ambinguous types
 class (Ok k a, Ok l a, A.Elt a) => AccCat k l a where
   mapC :: (Ok l a, NumCat l a, A.Shape sh) => A.Exp a `l` A.Exp a -> A.Acc (A.Array sh a) `k` A.Acc (A.Array sh a)
   fold1C :: (Ok l a, NumCat l a, A.Shape sh) => (A.Exp a, A.Exp a) `l` A.Exp a -> A.Acc (A.Array (sh A.:. Int) a) `k` A.Acc (A.Array sh a)

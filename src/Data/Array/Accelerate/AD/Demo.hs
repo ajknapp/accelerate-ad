@@ -8,10 +8,16 @@ import Data.Array.Accelerate.AD.Skeletons (matMul, idMat, runExp, swapLastTwo, t
 import qualified Data.Array.Accelerate as A
 import Data.Array.Accelerate.Interpreter (run)
 
+-- evaluated at x
 f' = A.use $ A.fromList (A.Z A.:. (2::Int) A.:. (10::Int)) [0::Double ..]
+-- evaluated at f(x)
 g' = A.use $ A.fromList (A.Z A.:. (10::Int) A.:. (3::Int)) [0::Double ..]
+-- evaluated at g(f(x))
 h' = A.use $ A.fromList (A.Z A.:. (3::Int) A.:. (50::Int)) [0::Double ..]
-k' = A.use $ A.fromList (A.Z A.:. (50::Int) A.:. (100::Int)) [0::Double ..]
+-- evaluated at h(g(f(x)))
+j' = A.use $ A.fromList (A.Z A.:. (50::Int) A.:. (80::Int)) [0::Double ..]
+-- evaluated at j(h(g(f(x))))
+k' = A.use $ A.fromList (A.Z A.:. (80::Int) A.:. (100::Int)) [0::Double ..]
 
 -- type D a b = a -> (b, a -o b)
 scale a = \da -> a*da
@@ -39,6 +45,8 @@ prepareBinary f x y =
 type UnaryD = A.Exp Double -> (A.Exp Double, A.Exp Double -> A.Exp Double)
 type BinaryD = A.Exp Double -> A.Exp Double -> (A.Exp Double, A.Exp (Double, Double) -> A.Exp (Double, Double))
 
+-- zipwith, but treat first input as a constant
+-- quick hack to avoid proper treatment of variables
 zipWithD'
   :: (A.Shape sh, A.Slice sh) =>
      BinaryD
@@ -79,7 +87,7 @@ sumD x =
   in (A.sum x,
       A.generate
       (A.lift $ shTail A.:. (1::Int) A.:. n)
-      (\_ -> A.constant 1.0))
+      (\_ -> A.constant 1.0)) -- stack trace pins this line as cause of cyclic definition in testOpt with awhile - I have no idea why
 
 sumOfSquares x y =
   let
@@ -88,6 +96,8 @@ sumOfSquares x y =
     (c,c') = sumD b
   in (c, (compReverse b' . compReverse a' $ id) c')
 
+-- Very simple optimization problem via gradient descent.
+-- \min_{x \in \mathbb{R}^d} |x - y|^2
 testOpt target init =
   let
     step a =

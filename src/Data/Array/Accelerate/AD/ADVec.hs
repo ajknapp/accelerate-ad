@@ -288,9 +288,11 @@ diffDelayedOpenAcc a = cvtA a
     --   SnocAtup t a -> cvtT t `SnocAtup` cvtA a
 
     -- cvtA :: DelayedOpenAcc aenv t -> DelayedOpenAcc aenv t
+    -- TODO handle scanl' and scanr'
     cvtA :: (Slice sh', Shape sh', Elt e) => DelayedOpenAcc aenv (Array sh' e) -> DelayedOpenAcc aenv (Array sh' e, Array (sh' :. Int) e)
     cvtA pacc = case pacc of
-      -- Delayed e fn ix -> Manifest $ Atuple (NilAtup `SnocAtup` Delayed e fn ix `SnocAtup` Delayed (error "AH") (error "HA") ix)
+      -- TODO last stream fusion fix
+      -- Delayed e fn ix -> Manifest $ Atuple (NilAtup `SnocAtup` Delayed e fn ix `SnocAtup` Delayed _foo _bar ix)
       Manifest m -> Manifest $ case m of
         Alet bnd body -> Alet bnd (cvtA body)
         Avar idx -> error "Avar"
@@ -593,7 +595,7 @@ applyRewriteExp k (Body b) = Body (k b)
 applyRewriteExp k (Lam f)  = Lam (applyRewriteExp k f)
 
 applyRewriteAcc
-    :: (forall aenv' t'. OpenAcc aenv' t' -> OpenAcc aenv' t')
+    :: (forall aenv' t' s'. OpenAcc aenv' t' -> OpenAcc aenv' s')
     -> PreOpenAfun OpenAcc aenv t
     -> PreOpenAfun OpenAcc aenv t
 applyRewriteAcc k (Abody b) = Abody (k b)

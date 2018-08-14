@@ -24,4 +24,3 @@ autodiff x = case x of
     Tup a' da' = k a
     Tup b' db' = k b
     in Tup (a'+b') (da' + db')
-  Mul
