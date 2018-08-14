@@ -122,7 +122,8 @@ matMul
     -> A.Acc (Array (sh :. Int :. Int) a)
     -> A.Acc (Array (sh :. Int :. Int) a)
 matMul arr brr
-  = if ca P./= rb then error msg else A.fold (+) 0 $ A.zipWith (*) arrRepl brrRepl
+  = -- if ca P./= rb then error msg else -- this introduces nested runtime parallelism :/
+  A.fold (+) 0 $ A.zipWith (*) arrRepl brrRepl
   where
     msg = show ca P.++ "AGH" P.++ show rb
     ca = runExp colsA

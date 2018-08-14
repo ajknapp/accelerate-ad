@@ -87,7 +87,7 @@ sumD x =
   in (A.sum x,
       A.generate
       (A.lift $ shTail A.:. (1::Int) A.:. n)
-      (\_ -> A.constant 1.0)) -- stack trace pins this line as cause of cyclic definition in testOpt with awhile - I have no idea why
+      (\_ -> A.constant (1.0 :: Double)))
 
 sumOfSquares x y =
   let
@@ -98,6 +98,10 @@ sumOfSquares x y =
 
 -- Very simple optimization problem via gradient descent.
 -- \min_{x \in \mathbb{R}^d} |x - y|^2
+testOpt
+  :: A.Acc (A.Array (A.Z A.:. Int) Double)
+     -> A.Acc (A.Array (A.Z A.:. Int) Double)
+     -> A.Acc (A.Array (A.Z A.:. Int) Double)
 testOpt target init =
   let
     step a =
@@ -108,9 +112,8 @@ testOpt target init =
     done a =
       let
         err = fst $ sumOfSquares target a
-      in A.unit $ A.sqrt (A.the err) A.> 1e-12
-  in -- should be (A.awhile done step init) but accelerate gives sharing error
-    step . step . step . step . step . step $ step init
+      in A.map (\a' -> a' A.> 1e-12) err
+  in A.awhile done step init
 
 target = A.use $ A.fromList (A.Z A.:. (10::Int)) [0:: Double ..]
 start = A.use $ A.fromList (A.Z A.:. (10::Int)) $ reverse [0::Double ..10]
