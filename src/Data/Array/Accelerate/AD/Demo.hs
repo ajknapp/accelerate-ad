@@ -112,7 +112,7 @@ testOpt target init =
     done a =
       let
         err = fst $ sumOfSquares target a
-      in A.map (\a' -> a' A.> 1e-12) err
+      in A.map (\a' -> A.sqrt a' A.> 1e-12) err
   in A.awhile done step init
 
 target = A.use $ A.fromList (A.Z A.:. (10::Int)) [0:: Double ..]
